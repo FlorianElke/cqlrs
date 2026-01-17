@@ -13,14 +13,12 @@ pub enum OutputFormat {
     Csv,
 }
 
-/// Get terminal width or default to 120
 fn get_terminal_width() -> usize {
     terminal_size()
         .map(|(Width(w), _)| w as usize)
         .unwrap_or(120)
 }
 
-/// Truncate string to fit max width with ellipsis
 fn truncate_str(s: &str, max_width: usize) -> String {
     if s.len() <= max_width {
         s.to_string()
@@ -56,7 +54,6 @@ fn format_as_table(result: &QueryResult) -> CqlResult<String> {
     let mut table = Table::new();
     table.set_format(*format::consts::FORMAT_BOX_CHARS);
 
-    // Get column specifications
     let col_specs = &result.col_specs;
     let num_cols = col_specs.len();
     
@@ -64,27 +61,21 @@ fn format_as_table(result: &QueryResult) -> CqlResult<String> {
         return Ok(format!("{}", "No columns in result".yellow()));
     }
 
-    // Get terminal width and calculate available space
     let terminal_width = get_terminal_width();
-    // Account for table borders and padding: 3 chars per column (| x |) + 1 for final |
     let border_overhead = (num_cols * 3) + 1;
     let available_width = terminal_width.saturating_sub(border_overhead).max(num_cols);
     
-    // Calculate max width per column
     let max_col_width = available_width / num_cols;
-    let min_col_width = 3; // Minimum width for "..."
-    let col_width = max_col_width.max(min_col_width).min(50); // Cap at 50 chars per column
+    let min_col_width = 3;
+    let col_width = max_col_width.max(min_col_width).min(50); 
 
-    // Prepare all data first to determine actual column widths needed
     let mut data_rows: Vec<Vec<String>> = Vec::new();
     let mut col_max_widths: Vec<usize> = vec![0; num_cols];
     
-    // Check header widths
     for (i, spec) in col_specs.iter().enumerate() {
         col_max_widths[i] = spec.name.len().min(col_width);
     }
     
-    // Process all rows and track max widths
     for row in rows {
         let row_data: Vec<String> = row.columns.iter()
             .map(|col| format_cql_value(col))
@@ -99,17 +90,14 @@ fn format_as_table(result: &QueryResult) -> CqlResult<String> {
         data_rows.push(row_data);
     }
     
-    // Adjust column widths if total exceeds available space
     let total_width: usize = col_max_widths.iter().sum();
     if total_width > available_width {
-        // Proportionally reduce all columns
         let scale = available_width as f64 / total_width as f64;
         for width in &mut col_max_widths {
             *width = ((*width as f64 * scale) as usize).max(min_col_width);
         }
     }
 
-    // Add header row with truncated names
     let header_cells: Vec<Cell> = col_specs.iter()
         .enumerate()
         .map(|(i, spec)| {
@@ -119,7 +107,6 @@ fn format_as_table(result: &QueryResult) -> CqlResult<String> {
         .collect();
     table.add_row(Row::new(header_cells));
 
-    // Add data rows with truncated content
     for row_data in data_rows {
         let cells: Vec<Cell> = row_data.iter()
             .enumerate()
@@ -180,14 +167,12 @@ fn format_as_csv(result: &QueryResult) -> CqlResult<String> {
 
     let mut output = String::new();
 
-    // Header
     let headers: Vec<String> = col_specs.iter()
         .map(|spec| spec.name.clone())
         .collect();
     output.push_str(&headers.join(","));
     output.push('\n');
 
-    // Data rows
     for row in rows {
         let values: Vec<String> = row.columns.iter()
             .map(|col| escape_csv_value(&format_cql_value(col)))

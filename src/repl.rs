@@ -85,7 +85,6 @@ impl CqlCompleter {
         let line_upper = line_up_to_cursor.to_uppercase();
         let mut completions = Vec::new();
 
-        // Complete keywords
         for keyword in &self.keywords {
             if keyword.starts_with(&last_word_upper) {
                 completions.push(Pair {
@@ -95,7 +94,6 @@ impl CqlCompleter {
             }
         }
 
-        // Complete keyspaces after USE, CREATE KEYSPACE, DROP KEYSPACE
         if line_upper.contains("USE ") || line_upper.contains("KEYSPACE ") {
             for keyspace in &self.keyspaces {
                 if keyspace.to_uppercase().starts_with(&last_word_upper) {
@@ -107,7 +105,6 @@ impl CqlCompleter {
             }
         }
 
-        // Complete tables after FROM, INTO, TABLE
         if line_upper.contains("FROM ") || line_upper.contains("INTO ") || line_upper.contains("TABLE ") {
             for table in &self.tables {
                 if table.to_uppercase().starts_with(&last_word_upper) {
@@ -134,7 +131,6 @@ impl Completer for CqlCompleter {
     ) -> RustylineResult<(usize, Vec<Pair>)> {
         let completions = self.get_completions(line, pos);
         
-        // Find the start of the current word
         let start = line[..pos]
             .rfind(|c: char| c.is_whitespace())
             .map(|i| i + 1)
@@ -173,9 +169,7 @@ impl Repl {
         }
     }
 
-    /// Load keyspaces and tables for auto-completion
     async fn refresh_schema(&mut self) -> CqlResult<()> {
-        // Load keyspaces
         match self.executor.execute("SELECT keyspace_name FROM system_schema.keyspaces").await {
             Ok(result) => {
                 if let Some(rows) = result.rows {
@@ -194,10 +188,9 @@ impl Repl {
                     self.completer.update_keyspaces(keyspaces);
                 }
             }
-            Err(_) => {} // Silently ignore schema query errors
+            Err(_) => {} 
         }
 
-        // Load tables from current keyspace if any
         match self.executor.execute("SELECT keyspace_name, table_name FROM system_schema.tables").await {
             Ok(result) => {
                 if let Some(rows) = result.rows {
@@ -217,7 +210,7 @@ impl Repl {
                     self.completer.update_tables(tables);
                 }
             }
-            Err(_) => {} // Silently ignore schema query errors
+            Err(_) => {} 
         }
 
         Ok(())
@@ -229,7 +222,6 @@ impl Repl {
         println!("{}", "Auto-completion enabled: Use TAB to complete CQL keywords, keyspaces, and tables.".bright_black());
         println!();
 
-        // Refresh schema for auto-completion
         let _ = self.refresh_schema().await;
 
         let mut rl = Editor::<CqlCompleter, DefaultHistory>::new()
@@ -237,10 +229,8 @@ impl Repl {
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             ))?;
         
-        // Set the helper (completer)
         rl.set_helper(Some(self.completer.clone()));
 
-        // Load history if it exists
         let history_file = dirs::home_dir()
             .map(|mut p: PathBuf| {
                 p.push(".cqlrs_history");
@@ -266,10 +256,8 @@ impl Repl {
                 Ok(line) => {
                     let line = line.trim();
                     
-                    // Add to history
                     let _ = rl.add_history_entry(line);
 
-                    // Handle special commands
                     if multi_line_query.is_empty() {
                         match line.to_lowercase().as_str() {
                             "quit" | "exit" => {
@@ -289,7 +277,6 @@ impl Repl {
                         }
                     }
 
-                    // Handle format change
                     if line.starts_with("\\format ") {
                         let new_format = line[8..].trim();
                         self.output_format = new_format.to_string();
@@ -297,7 +284,6 @@ impl Repl {
                         continue;
                     }
 
-                    // Handle schema refresh
                     if line == "\\refresh" {
                         println!("{}", "Refreshing schema...".cyan());
                         match self.refresh_schema().await {
@@ -312,13 +298,11 @@ impl Repl {
                         continue;
                     }
 
-                    // Handle describe commands
                     if line.starts_with("\\d") || line.to_lowercase().starts_with("describe ") {
                         self.handle_describe_command(line).await;
                         continue;
                     }
 
-                    // Build multi-line query
                     if !line.is_empty() {
                         if !multi_line_query.is_empty() {
                             multi_line_query.push(' ');
@@ -326,15 +310,12 @@ impl Repl {
                         multi_line_query.push_str(line);
                     }
 
-                    // Execute when we see a semicolon
                     if multi_line_query.ends_with(';') {
                         match self.executor.execute_and_print(&multi_line_query, &self.output_format).await {
                             Ok(_) => {
-                                // Refresh schema after DDL commands
                                 let query_upper = multi_line_query.to_uppercase();
                                 if query_upper.contains("CREATE ") || query_upper.contains("DROP ") || query_upper.contains("USE ") {
                                     let _ = self.refresh_schema().await;
-                                    // Update the helper with new schema
                                     rl.set_helper(Some(self.completer.clone()));
                                 }
                             }
@@ -360,7 +341,6 @@ impl Repl {
             }
         }
 
-        // Save history
         if let Some(ref path) = history_file {
             let _ = rl.save_history(path);
         }
@@ -406,7 +386,6 @@ impl Repl {
                 "SELECT keyspace_name, table_name FROM system_schema.tables;".to_string()
             }
         } else {
-            // General describe handling
             command.to_string() + ";"
         };
 
