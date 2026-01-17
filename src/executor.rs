@@ -34,7 +34,6 @@ impl QueryExecutor {
     pub async fn execute_and_print(&mut self, query_str: &str, format: &str) -> CqlResult<()> {
         let query_trimmed = query_str.trim();
         
-        // Handle USE keyspace command specially
         if query_trimmed.to_lowercase().starts_with("use ") {
             let keyspace = query_trimmed[4..].trim().trim_matches(';').trim();
             self.connection.use_keyspace(keyspace).await?;
@@ -42,7 +41,6 @@ impl QueryExecutor {
             return Ok(());
         }
 
-        // Handle empty queries
         if query_trimmed.is_empty() {
             return Ok(());
         }
