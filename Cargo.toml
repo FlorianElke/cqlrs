@@ -1,0 +1,42 @@
+[package]
+name = "cqlrs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Florian"]
+description = "A fully functional Cassandra CLI client written in Rust"
+
+[[bin]]
+name = "cqlrs"
+path = "src/main.rs"
+
+[dependencies]
+# Cassandra driver
+scylla = { version = "0.13", features = ["ssl"] }
+# OpenSSL for custom TLS configuration
+openssl = "0.10"
+# CLI framework
+clap = { version = "4.5", features = ["derive", "cargo"] }
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+# REPL and interactive input
+rustyline = "14.0"
+rustyline-derive = "0.10"
+# Table formatting
+prettytable-rs = "0.10"
+# Terminal size detection
+terminal_size = "0.3"
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Colors
+colored = "2.1"
+# Home directory
+dirs = "5.0"
+# Secure password input
+rpassword = "7.3"
