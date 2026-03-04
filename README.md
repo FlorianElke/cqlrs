@@ -104,6 +104,8 @@ Im interaktiven Modus stehen folgende Befehle zur Verfügung:
 - `\dk` - Listet alle Keyspaces
 - `\dt` - Listet alle Tabellen
 - `\dt <keyspace>` - Listet Tabellen in einem Keyspace
+- `export <table> [datei.csv]` - Exportiert alle Tabellenzeilen nach CSV (Standard: `<keyspace>_<table>.csv`)
+- `import <table> [datei.csv]` - Importiert CSV-Zeilen in die Tabelle (Standard: `<keyspace>_<table>.csv`)
 
 #### CQL-Queries
 Alle CQL-Befehle werden mit `;` abgeschlossen:

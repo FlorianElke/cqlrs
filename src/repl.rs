@@ -9,8 +9,11 @@ use rustyline::Result as RustylineResult;
 use colored::*;
 use std::path::PathBuf;
 use std::collections::HashSet;
+use std::collections::HashMap;
+use std::fs::File;
 use crate::executor::QueryExecutor;
 use crate::error::CqlResult;
+use crate::formatter::{format_result, OutputFormat};
 
 /// CQL Auto-Completer with schema awareness
 #[derive(Clone)]
@@ -45,6 +48,7 @@ impl CqlCompleter {
             // Other
             "BEGIN", "BATCH", "APPLY", "UNLOGGED",
             "CONSISTENCY", "GRANT", "REVOKE", "PERMISSIONS",
+            "EXPORT", "IMPORT",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -277,6 +281,20 @@ impl Repl {
                         }
                     }
 
+                    if line.to_lowercase().starts_with("export ") {
+                        if let Err(e) = self.handle_export_command(line).await {
+                            eprintln!("{} {}", "Error:".red().bold(), e);
+                        }
+                        continue;
+                    }
+
+                    if line.to_lowercase().starts_with("import ") {
+                        if let Err(e) = self.handle_import_command(line).await {
+                            eprintln!("{} {}", "Error:".red().bold(), e);
+                        }
+                        continue;
+                    }
+
                     if line.starts_with("\\format ") {
                         let new_format = line[8..].trim();
                         self.output_format = new_format.to_string();
@@ -357,6 +375,8 @@ impl Repl {
         println!("  {}   - List all keyspaces", "\\dk".green());
         println!("  {} - List tables in keyspace", "\\dt [keyspace]".green());
         println!("  {}   - Refresh schema cache", "\\refresh".green());
+        println!("  {} - Export table data to CSV", "export <table> [file.csv]".green());
+        println!("  {} - Import table data from CSV", "import <table> [file.csv]".green());
         println!();
         println!("{}", "=== Auto-Completion ===".bright_cyan().bold());
         println!("  Press {} to auto-complete:", "TAB".yellow().bold());
@@ -395,5 +415,220 @@ impl Repl {
                 eprintln!("{} {}", "Error:".red().bold(), e);
             }
         }
+    }
+
+    async fn handle_export_command(&mut self, command: &str) -> CqlResult<()> {
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        if parts.len() < 2 {
+            println!("Usage: export <table_name> [file.csv]");
+            return Ok(());
+        }
+
+        let table_input = parts[1].trim_end_matches(';');
+        let (keyspace, table_name) = self.resolve_table_reference(table_input).await?;
+        let file_name = if parts.len() > 2 {
+            parts[2].trim_end_matches(';').to_string()
+        } else {
+            format!("{}_{}.csv", keyspace, table_name)
+        };
+
+        let query = format!("SELECT * FROM {}.{};", keyspace, table_name);
+        let result = self.executor.execute(&query).await?;
+        let row_count = result.rows.as_ref().map(|rows| rows.len()).unwrap_or(0);
+        let csv_output = format_result(&result, OutputFormat::Csv)?;
+
+        std::fs::write(&file_name, csv_output)?;
+        println!(
+            "{} {} ({})",
+            "Exported table to".green(),
+            file_name.cyan(),
+            format!("{} row(s)", row_count).bright_black()
+        );
+
+        Ok(())
+    }
+
+    async fn handle_import_command(&mut self, command: &str) -> CqlResult<()> {
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        if parts.len() < 2 {
+            println!("Usage: import <table_name> [file.csv]");
+            return Ok(());
+        }
+
+        let table_input = parts[1].trim_end_matches(';');
+        let (keyspace, table_name) = self.resolve_table_reference(table_input).await?;
+        let file_name = if parts.len() > 2 {
+            parts[2].trim_end_matches(';').to_string()
+        } else {
+            format!("{}_{}.csv", keyspace, table_name)
+        };
+
+        let column_types = self.get_column_types(&keyspace, &table_name).await?;
+        if column_types.is_empty() {
+            println!("{}", "No column metadata found for table.".yellow());
+            return Ok(());
+        }
+
+        let file = File::open(&file_name)?;
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .from_reader(file);
+
+        let headers = reader.headers()
+            .map_err(|e| crate::error::CqlError::QueryError(format!("CSV header read failed: {}", e)))?
+            .clone();
+
+        let header_names: Vec<String> = headers.iter().map(|h| h.to_string()).collect();
+        if header_names.is_empty() {
+            println!("{}", "CSV has no columns.".yellow());
+            return Ok(());
+        }
+
+        for header in &header_names {
+            if !column_types.contains_key(header) {
+                return Err(crate::error::CqlError::InvalidQuery(format!(
+                    "CSV column '{}' does not exist in {}.{}",
+                    header, keyspace, table_name
+                )));
+            }
+        }
+
+        let mut imported = 0usize;
+
+        for record in reader.records() {
+            let record = record
+                .map_err(|e| crate::error::CqlError::QueryError(format!("CSV record read failed: {}", e)))?;
+
+            if record.len() != header_names.len() {
+                return Err(crate::error::CqlError::InvalidQuery(format!(
+                    "CSV row has {} values but {} columns are expected",
+                    record.len(),
+                    header_names.len()
+                )));
+            }
+
+            let values: Vec<String> = header_names
+                .iter()
+                .zip(record.iter())
+                .map(|(header, value)| {
+                    let cql_type = column_types.get(header)
+                        .map(|s| s.as_str())
+                        .unwrap_or("text");
+                    Self::csv_value_to_cql_literal(value, cql_type)
+                })
+                .collect();
+
+            let insert = format!(
+                "INSERT INTO {}.{} ({}) VALUES ({});",
+                keyspace,
+                table_name,
+                header_names.join(", "),
+                values.join(", ")
+            );
+
+            self.executor.execute(&insert).await?;
+            imported += 1;
+        }
+
+        println!(
+            "{} {} ({})",
+            "Imported CSV into".green(),
+            format!("{}.{}", keyspace, table_name).cyan(),
+            format!("{} row(s)", imported).bright_black()
+        );
+
+        Ok(())
+    }
+
+    async fn resolve_table_reference(&self, table_ref: &str) -> CqlResult<(String, String)> {
+        let table_ref = table_ref.trim().trim_end_matches(';');
+        if let Some((keyspace, table_name)) = table_ref.split_once('.') {
+            return Ok((keyspace.to_string(), table_name.to_string()));
+        }
+
+        let escaped_table = table_ref.replace('\'', "''");
+        let query = format!(
+            "SELECT keyspace_name FROM system_schema.tables WHERE table_name = '{}' ALLOW FILTERING;",
+            escaped_table
+        );
+        let result = self.executor.execute(&query).await?;
+
+        let mut keyspaces = Vec::new();
+        if let Some(rows) = result.rows {
+            for row in rows {
+                if let Some(scylla::frame::response::result::CqlValue::Text(ks)) = row.columns.first().and_then(|c| c.as_ref()) {
+                    keyspaces.push(ks.clone());
+                }
+            }
+        }
+
+        keyspaces.sort();
+        keyspaces.dedup();
+
+        match keyspaces.len() {
+            0 => Err(crate::error::CqlError::InvalidQuery(format!("Table '{}' not found", table_ref))),
+            1 => Ok((keyspaces[0].clone(), table_ref.to_string())),
+            _ => Err(crate::error::CqlError::InvalidQuery(format!(
+                "Table '{}' exists in multiple keyspaces ({:?}). Use keyspace.table",
+                table_ref, keyspaces
+            ))),
+        }
+    }
+
+    async fn get_column_types(&self, keyspace: &str, table: &str) -> CqlResult<HashMap<String, String>> {
+        let escaped_keyspace = keyspace.replace('\'', "''");
+        let escaped_table = table.replace('\'', "''");
+        let query = format!(
+            "SELECT column_name, type FROM system_schema.columns WHERE keyspace_name = '{}' AND table_name = '{}';",
+            escaped_keyspace,
+            escaped_table
+        );
+
+        let result = self.executor.execute(&query).await?;
+        let mut map = HashMap::new();
+
+        if let Some(rows) = result.rows {
+            for row in rows {
+                if row.columns.len() < 2 {
+                    continue;
+                }
+
+                let name = match row.columns[0].as_ref() {
+                    Some(scylla::frame::response::result::CqlValue::Text(v)) => v.clone(),
+                    _ => continue,
+                };
+
+                let col_type = match row.columns[1].as_ref() {
+                    Some(scylla::frame::response::result::CqlValue::Text(v)) => v.clone(),
+                    _ => continue,
+                };
+
+                map.insert(name, col_type);
+            }
+        }
+
+        Ok(map)
+    }
+
+    fn csv_value_to_cql_literal(value: &str, cql_type: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("NULL") {
+            return "NULL".to_string();
+        }
+
+        let lower = cql_type.to_lowercase();
+
+        if lower.starts_with("text")
+            || lower.starts_with("varchar")
+            || lower.starts_with("ascii")
+            || lower.starts_with("inet")
+            || lower.starts_with("date")
+            || lower.starts_with("time")
+            || lower.starts_with("timestamp")
+        {
+            return format!("'{}'", trimmed.replace('\'', "''"));
+        }
+
+        trimmed.to_string()
     }
 }
