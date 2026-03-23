@@ -19,16 +19,32 @@ fn get_terminal_width() -> usize {
         .unwrap_or(120)
 }
 
-fn truncate_str(s: &str, max_width: usize) -> String {
-    if s.len() <= max_width {
-        s.to_string()
-    } else if max_width <= 3 {
-        s.chars().take(max_width).collect()
-    } else {
-        let mut result: String = s.chars().take(max_width - 3).collect();
-        result.push_str("...");
-        result
+fn wrap_str(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return s.to_string();
     }
+
+    let mut wrapped = String::new();
+
+    for (line_idx, original_line) in s.split('\n').enumerate() {
+        if line_idx > 0 {
+            wrapped.push('\n');
+        }
+
+        let chars: Vec<char> = original_line.chars().collect();
+        if chars.is_empty() {
+            continue;
+        }
+
+        for (i, chunk) in chars.chunks(max_width).enumerate() {
+            if i > 0 {
+                wrapped.push('\n');
+            }
+            wrapped.extend(chunk.iter());
+        }
+    }
+
+    wrapped
 }
 
 pub fn format_result(result: &QueryResult, format: OutputFormat) -> CqlResult<String> {
@@ -101,8 +117,8 @@ fn format_as_table(result: &QueryResult) -> CqlResult<String> {
     let header_cells: Vec<Cell> = col_specs.iter()
         .enumerate()
         .map(|(i, spec)| {
-            let truncated = truncate_str(&spec.name, col_max_widths[i]);
-            Cell::new(&truncated).style_spec("Fb")
+            let wrapped = wrap_str(&spec.name, col_max_widths[i]);
+            Cell::new(&wrapped).style_spec("Fb")
         })
         .collect();
     table.add_row(Row::new(header_cells));
@@ -111,8 +127,8 @@ fn format_as_table(result: &QueryResult) -> CqlResult<String> {
         let cells: Vec<Cell> = row_data.iter()
             .enumerate()
             .map(|(i, cell)| {
-                let truncated = truncate_str(cell, col_max_widths[i]);
-                Cell::new(&truncated)
+                let wrapped = wrap_str(cell, col_max_widths[i]);
+                Cell::new(&wrapped)
             })
             .collect();
         table.add_row(Row::new(cells));
